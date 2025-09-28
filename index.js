@@ -68,7 +68,7 @@ client.on('ready', async () => {
         const targetGroup = chats.find(chat => chat.isGroup && chat.name === TARGET_GROUP_NAME);
 
         if (targetGroup) {
-            const msg = 'TurboGastos conectado y listo para procesar gastos.';
+            const msg = '🤖 TurboGastos conectado y listo para procesar gastos.';
             await client.sendMessage(targetGroup.id._serialized, msg);
             console.log(`Successfully sent startup message to '${TARGET_GROUP_NAME}'.`);
         } else {
