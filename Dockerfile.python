@@ -29,9 +29,6 @@ RUN uv pip install --system -r requirements.txt
 # Copy the rest of the application code
 COPY worker.py .
 
-# Change ownership of the app directory
-RUN chown -R appuser:appuser /app
-
 # Switch to the non-root user
 USER appuser
 
