@@ -49,10 +49,8 @@ client.on('ready', async () => {
         let waitTime = 0;
         const maxWaitTime = 30; // 30 seconds
 
-        while (state !== null && waitTime < maxWaitTime) {
-            console.log(`Current state: ${state}.`);
-            if (state === 'CONNECTED') break;
-            console.log(`Waiting for connection... (${waitTime}s)`);
+        while (state !== 'CONNECTED' && waitTime < maxWaitTime) {
+            console.log(`Current state: ${state}. Waiting for connection... (${waitTime}s)`);
             await new Promise(resolve => setTimeout(resolve, 1000)); // wait 1 second
             state = await client.getState();
             waitTime++;
@@ -125,6 +123,15 @@ client.on('message', async (msg) => {
         }
     } catch (error) {
         console.error('Error processing message:', error);
+    }
+});
+
+// Placeholder for handling messages created by the user themselves
+client.on('message_create', (msg) => {
+    // This event fires for messages sent by the client, including from the linked device.
+    // We can add logic here later to process self-sent messages.
+    if (msg.fromMe) {
+        console.log(`DEBUG: MESSAGE_CREATE event fired for self-sent message. To: ${msg.to}, Body: ${msg.body}`);
     }
 });
 
