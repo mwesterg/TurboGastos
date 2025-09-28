@@ -87,15 +87,16 @@ class StatsSummary(BaseModel):
 
 # --- Expense Parsing (LLM) ---
 async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, Any]:
+    print("DEBUG: parse_expense_with_llm started.")
     """Parses expense details from a message body using Google Gemini."""
     if not GOOGLE_API_KEY:
-        print("LLM parsing skipped: GOOGLE_API_KEY is not set.")
+        print("DEBUG: LLM parsing skipped: GOOGLE_API_KEY is not set.")
         return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": "LLM not configured"})}
 
     try:
         model = genai.GenerativeModel(model_name)
     except Exception as e:
-        print(f"Error initializing LLM model '{model_name}': {e}")
+        print(f"DEBUG: Error initializing LLM model '{model_name}': {e}")
         return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": f"LLM model '{model_name}' not available"})}
 
     prompt = f"""
@@ -111,8 +112,11 @@ async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, An
     Text to analyze: "{msg_body}"
     """
     try:
+        print("DEBUG: Calling Google AI API...")
         response = await model.generate_content_async(prompt)
+        print("DEBUG: Google AI API call returned.")
         text_response = response.text.strip()
+        print(f"DEBUG: Raw LLM response: {text_response}")
         json_str = text_response[text_response.find('{'):text_response.rfind('}')+1]
         parsed = json.loads(json_str)
         return {
@@ -122,7 +126,7 @@ async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, An
             "meta_json": json.dumps(parsed.get("meta_json", {}))
         }
     except Exception as e:
-        print(f"Error parsing with LLM: {e}")
+        print(f"DEBUG: Error parsing with LLM: {e}")
         return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": str(e)})}
 
 # --- FastAPI App ---
