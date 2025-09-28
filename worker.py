@@ -88,11 +88,11 @@ class StatsSummary(BaseModel):
 # --- Expense Parsing (LLM) ---
 async def parse_expense_with_llm(msg_body: str) -> Dict[str, Any]:
     """Parses expense details from a message body using Google Gemini."""
-    if not genai.get_model("models/gemini-pro"):
-        print("LLM model not available, returning stub.")
+    if not genai.get_model(GEMINI_MODEL):
+        print(f"LLM model '{GEMINI_MODEL}' not available, returning stub.")
         return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": "LLM not configured"})}
 
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel(GEMINI_MODEL)
     prompt = f"""
     Analyze the following text and extract expense information.
     Return a single, minified JSON object with these exact keys: "amount", "currency", "category", "meta_json".

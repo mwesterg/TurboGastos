@@ -99,7 +99,7 @@ async function processAndPublishMessage(msg, eventType) {
     console.log(`DEBUG: [${eventType}] event fired. From: ${msg.from}, To: ${msg.to}, Body: ${msg.body}`);
 
     // Ignore the bot's own automated replies to prevent processing loops
-    if (msg.fromMe && (msg.body.startsWith('✅') || msg.body.startsWith('🤖') || msg.body.startsWith('TurboGastos conectado'))) {
+    if (msg.fromMe && msg.body.startsWith('🤖:')) {
         console.log(`DEBUG: Ignoring self-sent automated message from [${eventType}] event.`);
         return;
     }
@@ -111,15 +111,17 @@ async function processAndPublishMessage(msg, eventType) {
         if (chat.isGroup && chat.name === TARGET_GROUP_NAME) {
             console.log(`DEBUG: Message from [${eventType}] is from target group '${TARGET_GROUP_NAME}'. Processing...`);
             const contact = await msg.getContact();
+            
+            // Ensure all payload values are strings for Redis
             const payload = {
-                wid: msg.id._serialized,
-                chat_id: chat.id._serialized, // Use chat ID for consistency
-                chat_name: chat.name,
-                sender_id: msg.author || msg.from,
-                sender_name: contact.pushname || contact.name || 'Unknown',
-                timestamp: msg.timestamp,
-                type: msg.type,
-                body: msg.body,
+                wid: String(msg.id._serialized),
+                chat_id: String(chat.id._serialized),
+                chat_name: String(chat.name),
+                sender_id: String(msg.author || msg.from),
+                sender_name: String(contact.pushname || contact.name || 'Unknown'),
+                timestamp: String(msg.timestamp),
+                type: String(msg.type),
+                body: String(msg.body),
             };
 
             console.log(`DEBUG: Publishing payload from [${eventType}] to Redis:`, payload);
