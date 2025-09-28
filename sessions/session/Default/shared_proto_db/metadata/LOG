@@ -1,2 +1,3 @@
-2025/09/28-13:38:34.937 5a Creating DB /app/sessions/session/Default/shared_proto_db/metadata since it was missing.
-2025/09/28-13:38:35.077 5a Reusing MANIFEST /app/sessions/session/Default/shared_proto_db/metadata/MANIFEST-000001
+2025/09/28-15:56:50.752 2a Reusing MANIFEST /app/sessions/session/Default/shared_proto_db/metadata/MANIFEST-000001
+2025/09/28-15:56:50.851 2a Recovering log #3
+2025/09/28-15:56:50.883 2a Reusing old log /app/sessions/session/Default/shared_proto_db/metadata/000003.log 

@@ -21,12 +21,13 @@ services:
       dockerfile: Dockerfile.node
     container_name: turbogastos-node-ingestor
     restart: unless-stopped
+    shm_size: 512m
     volumes:
       - ./sessions:/app/sessions
     ports:
       - "3000:3000"
     environment:
-      - TZ=America/New_York
+      - TZ=America/Santiago
       - API_KEY=${API_KEY}
       - REDIS_URL=redis://redis:6379
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -51,7 +52,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - TZ=America/New_York
+      - TZ=America/Santiago
       - API_KEY=${API_KEY}
       - REDIS_URL=redis://redis:6379
       - DB_PATH=/data/gastos.db

@@ -31,7 +31,7 @@ const client = new Client({
     puppeteer: {
         headless: true,
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
     }
 });
 
@@ -40,8 +40,43 @@ client.on('qr', qr => {
     qrcode.generate(qr, { small: true });
 });
 
-client.on('ready', () => {
-    console.log('WhatsApp client is ready!');
+client.on('ready', async () => {
+    console.log('WhatsApp client is ready! Waiting for full connection before sending startup message...');
+
+    // Wait up to 30 seconds for the client to be fully connected
+    try {
+        let state = await client.getState();
+        let waitTime = 0;
+        const maxWaitTime = 30; // 30 seconds
+
+        while (state !== null && waitTime < maxWaitTime) {
+            console.log(`Current state: ${state}.`);
+            if (state === 'CONNECTED') break;
+            console.log(`Waiting for connection... (${waitTime}s)`);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // wait 1 second
+            state = await client.getState();
+            waitTime++;
+        }
+
+        if (state !== 'CONNECTED') {
+            console.error(`Error: Client did not reach a fully connected state within ${maxWaitTime} seconds.`);
+            return;
+        }
+
+        console.log('Client is fully connected. Sending startup message...');
+        const chats = await client.getChats();
+        const targetGroup = chats.find(chat => chat.isGroup && chat.name === TARGET_GROUP_NAME);
+
+        if (targetGroup) {
+            const msg = 'TurboGastos conectado y listo para procesar gastos.';
+            await client.sendMessage(targetGroup.id._serialized, msg);
+            console.log(`Successfully sent startup message to '${TARGET_GROUP_NAME}'.`);
+        } else {
+            console.warn(`Warning: Could not find target group '${TARGET_GROUP_NAME}' to send startup message.`);
+        }
+    } catch (error) {
+        console.error('Error during ready state check or message sending:', error);
+    }
 });
 
 client.on('error', (err) => {
@@ -83,6 +118,20 @@ client.on('message', async (msg) => {
     } catch (error) {
         console.error('Error processing message:', error);
     }
+});
+
+client.on('change_state', s => console.log('[WWebJS] State:', s));
+client.on('auth_failure', msg => console.error('[WWebJS] AUTH FAILURE:', msg));
+client.on('disconnected', reason => {
+  console.warn('[WWebJS] DISCONNECTED:', reason);
+  // Optionally: process.exit(1) and rely on Docker restart policy
+});
+
+
+process.on('SIGINT', async () => {
+  console.log('Shutting down…');
+  try { await client.destroy(); } catch {}
+  process.exit(0);
 });
 
 // --- API Endpoints ---
