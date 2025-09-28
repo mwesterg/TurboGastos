@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: turbogastos-redis
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    container_name: turbogastos-node-ingestor
+    restart: unless-stopped
+    volumes:
+      - ./sessions:/app/sessions
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=America/New_York
+      - API_KEY=${API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: turbogastos-python-worker
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    ports:
+      - "8000:8000"
+    environment:
+      - TZ=America/New_York
+      - API_KEY=${API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - DB_PATH=/data/gastos.db
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_KEY=${API_KEY}
+    container_name: turbogastos-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - worker
+
+volumes:
+  redis-data:
+    driver: local
+  sessions:
+    driver: local
+  data: # For SQLite DB
+    driver: local

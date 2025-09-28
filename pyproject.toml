@@ -1,0 +1,17 @@
+[project]
+name = "whatsapp-worker"
+version = "0.1.0"
+description = "WhatsApp message processing worker"
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "redis>=5.0.0",
+    "pydantic>=2.0.0",
+    "google-generativeai"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

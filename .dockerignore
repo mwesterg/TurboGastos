@@ -1,0 +1,30 @@
+# Git and project files
+.git
+.gitignore
+README.md
+GEMINI.md
+
+# Node.js
+node_modules
+npm-debug.log
+
+# Python
+__pycache__
+*.pyc
+.venv
+requirements.txt
+
+# Docker
+Dockerfile.node
+Dockerfile.python
+docker-compose.yml
+
+# Data and sessions (managed by volumes)
+data/
+sessions/
+
+# IDE / OS files
+.idea
+.vscode
+*.iml
+.DS_Store
