@@ -191,10 +191,12 @@ async function main() {
     // Subscribe to the confirmation channel
     await redisSubscriber.subscribe('gastos:confirmations', async (message) => {
         try {
-            const { chat_id, original_wid } = JSON.parse(message);
-            if (chat_id && original_wid) {
-                console.log(`Sending confirmation reply to ${chat_id}`);
-                await client.sendMessage(chat_id, '🤖: ✅ Gasto procesado.', { quotedMessageId: original_wid });
+            const { chat_id, original_wid, reply_message } = JSON.parse(message);
+            if (chat_id && original_wid && reply_message) {
+                console.log(`Sending dynamic reply to ${chat_id}: "${reply_message}"`);
+                // Prepend the standard bot prefix to the AI-generated message
+                const final_message = `🤖: ${reply_message}`;
+                await client.sendMessage(chat_id, final_message, { quotedMessageId: original_wid });
             }
         } catch (error) {
             console.error('Error handling confirmation message:', error);

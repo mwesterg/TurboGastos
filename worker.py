@@ -87,27 +87,33 @@ class StatsSummary(BaseModel):
 
 # --- Expense Parsing (LLM) ---
 async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, Any]:
+    """Parses expense details and generates a conversational reply from a message body."""
     print("DEBUG: parse_expense_with_llm started.")
-    """Parses expense details from a message body using Google Gemini."""
     if not GOOGLE_API_KEY:
         print("DEBUG: LLM parsing skipped: GOOGLE_API_KEY is not set.")
-        return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": "LLM not configured"})}
+        return {"reply_message": "Error: El servicio de IA no está configurado.", "expense_data": None}
 
     try:
         model = genai.GenerativeModel(model_name)
     except Exception as e:
         print(f"DEBUG: Error initializing LLM model '{model_name}': {e}")
-        return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": f"LLM model '{model_name}' not available"})}
+        return {"reply_message": "Error: No se pudo iniciar el modelo de IA.", "expense_data": None}
 
     prompt = f"""
-    Analyze the following text and extract expense information.
-    Return a single, minified JSON object with these exact keys: "amount", "currency", "category", "meta_json".
-    - "amount": A float representing the expense amount.
-    - "currency": The currency code (e.g., "USD", "EUR", "CLP"). Default to "CLP" if not specified.
-    - "category": A single, relevant category from this list: Food, Transport, Shopping, Utilities, Health, Entertainment, Other.
-    - "meta_json": A JSON string containing any other relevant data you can extract.
+    You are a helpful assistant in a WhatsApp group chat for tracking expenses. Your personality is friendly and concise.
+    Analyze the following text. Your response MUST be a single, minified JSON object with two keys: "reply_message" and "expense_data".
 
-    If the text is not an expense, return a JSON object with null values for all keys.
+    1.  "reply_message": A short, conversational reply in Spanish. If the message is an expense, confirm it. If it's a greeting or question, answer it. If it's nonsense, be politely confused.
+    2.  "expense_data": An object with expense details. If the message is NOT an expense, this MUST be null.
+        - If it IS an expense, the object must contain these keys: "amount" (float), "currency" (string, default "CLP"), "category" (string from list: Food, Transport, Shopping, Utilities, Health, Entertainment, Other), and "meta_json" (a JSON string for extra data).
+
+    Examples:
+    - Input: "hola"
+      Output: {{\"reply_message\":\"¡Hola! ¿Cómo puedo ayudarte?\",\"expense_data\":null}}
+    - Input: "supermercado 12.50 usd"
+      Output: {{\"reply_message\":\"Ok, anotado: $12.50 USD en Shopping.\",\"expense_data\":{{\"amount\":12.50,\"currency\":\"USD\",\"category\":\"Shopping\",\"meta_json\":\"{{\\\"source\\\":\\\"supermercado\\\"}}\"}}}}
+    - Input: "cuanto he gastado?"
+      Output: {{\"reply_message\":\"Aún no puedo responder esa pregunta, ¡pero pronto lo haré!\",\"expense_data\":null}}
 
     Text to analyze: "{msg_body}"
     """
@@ -119,15 +125,10 @@ async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, An
         print(f"DEBUG: Raw LLM response: {text_response}")
         json_str = text_response[text_response.find('{'):text_response.rfind('}')+1]
         parsed = json.loads(json_str)
-        return {
-            "amount": parsed.get("amount"),
-            "currency": parsed.get("currency"),
-            "category": parsed.get("category"),
-            "meta_json": json.dumps(parsed.get("meta_json", {}))
-        }
+        return parsed # Return the full object { "reply_message": ..., "expense_data": ... }
     except Exception as e:
         print(f"DEBUG: Error parsing with LLM: {e}")
-        return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": str(e)})}
+        return {"reply_message": "Lo siento, no entendí eso. ¿Puedes intentarlo de nuevo?", "expense_data": None}
 
 # --- FastAPI App ---
 app = FastAPI()
@@ -220,33 +221,47 @@ async def redis_consumer():
             await asyncio.sleep(5)
 
 async def process_message(msg_data: Dict[str, Any], r: redis.Redis):
-    """Parses and upserts a message into the SQLite database using LLM."""
+    """Parses, replies to, and upserts a message into the SQLite database using LLM."""
+    print("DEBUG: process_message started.")
     try:
-        parsed_expense = await parse_expense_with_llm(msg_data.get('body', ''), GEMINI_MODEL)
+        print("DEBUG: Calling LLM for conversational parsing...")
+        llm_result = await parse_expense_with_llm(msg_data.get('body', ''), GEMINI_MODEL)
+        print(f"DEBUG: LLM result: {llm_result}")
 
-        message = Message(
-            wid=msg_data['wid'],
-            chat_id=msg_data['chat_id'],
-            chat_name=msg_data['chat_name'],
-            sender_id=msg_data['sender_id'],
-            sender_name=msg_data['sender_name'],
-            ts=int(msg_data['timestamp']),
-            type=msg_data['type'],
-            body=msg_data['body'],
-            amount=parsed_expense.get('amount'),
-            currency=parsed_expense.get('currency'),
-            category=parsed_expense.get('category'),
-            meta_json=parsed_expense.get('meta_json')
-        )
+        reply_message = llm_result.get("reply_message", "No pude procesar tu mensaje.")
+        expense_data = llm_result.get("expense_data")
 
-        await asyncio.to_thread(upsert_message_db, message)
+        # Always publish a reply back to the ingestor
+        print("DEBUG: Publishing conversational reply to Redis...")
+        confirmation_payload = json.dumps({
+            "chat_id": msg_data['chat_id'],
+            "original_wid": msg_data['wid'],
+            "reply_message": reply_message
+        })
+        await r.publish("gastos:confirmations", confirmation_payload)
+        print("DEBUG: Conversational reply published.")
 
-        if parsed_expense.get('amount') is not None:
-            confirmation_payload = json.dumps({
-                "chat_id": message.chat_id,
-                "original_wid": message.wid
-            })
-            await r.publish("gastos:confirmations", confirmation_payload)
+        # Only save to database if the expense data is valid
+        if expense_data and expense_data.get('amount') is not None:
+            print("DEBUG: Valid expense data found. Upserting to database...")
+            message = Message(
+                wid=msg_data['wid'],
+                chat_id=msg_data['chat_id'],
+                chat_name=msg_data['chat_name'],
+                sender_id=msg_data['sender_id'],
+                sender_name=msg_data['sender_name'],
+                ts=int(msg_data['timestamp']),
+                type=msg_data['type'],
+                body=msg_data['body'],
+                amount=expense_data.get('amount'),
+                currency=expense_data.get('currency'),
+                category=expense_data.get('category'),
+                meta_json=expense_data.get('meta_json')
+            )
+            await asyncio.to_thread(upsert_message_db, message)
+            print("DEBUG: Database upsert complete.")
+        else:
+            print("DEBUG: No valid expense data found. Skipping database insert.")
 
     except Exception as e:
         print(f"Error processing message for DB: {e}")
