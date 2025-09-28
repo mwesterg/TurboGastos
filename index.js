@@ -192,7 +192,7 @@ async function main() {
             const { chat_id, original_wid } = JSON.parse(message);
             if (chat_id && original_wid) {
                 console.log(`Sending confirmation reply to ${chat_id}`);
-                await client.sendMessage(chat_id, '✅ Gasto procesado.', { quotedMessageId: original_wid });
+                await client.sendMessage(chat_id, '🤖: ✅ Gasto procesado.', { quotedMessageId: original_wid });
             }
         } catch (error) {
             console.error('Error handling confirmation message:', error);
