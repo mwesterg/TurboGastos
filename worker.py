@@ -18,6 +18,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 DB_PATH = os.getenv("DB_PATH", "/data/gastos.db")
 API_KEY = os.getenv("API_KEY", "your-secret-key")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-pro")
 
 REDIS_STREAM_NAME = "gastos:msgs"
 REDIS_GROUP_NAME = "py-expense-workers"
@@ -38,7 +39,6 @@ def get_api_key(api_key: str = Security(api_key_header)):
 
 # --- Database Setup ---
 def get_db_connection():
-    # Ensure the directory for the database exists
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -86,13 +86,18 @@ class StatsSummary(BaseModel):
     last_message_ts: Optional[int] = None
 
 # --- Expense Parsing (LLM) ---
-async def parse_expense_with_llm(msg_body: str) -> Dict[str, Any]:
+async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, Any]:
     """Parses expense details from a message body using Google Gemini."""
-    if not genai.get_model(GEMINI_MODEL):
-        print(f"LLM model '{GEMINI_MODEL}' not available, returning stub.")
+    if not GOOGLE_API_KEY:
+        print("LLM parsing skipped: GOOGLE_API_KEY is not set.")
         return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": "LLM not configured"})}
 
-    model = genai.GenerativeModel(GEMINI_MODEL)
+    try:
+        model = genai.GenerativeModel(model_name)
+    except Exception as e:
+        print(f"Error initializing LLM model '{model_name}': {e}")
+        return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": f"LLM model '{model_name}' not available"})}
+
     prompt = f"""
     Analyze the following text and extract expense information.
     Return a single, minified JSON object with these exact keys: "amount", "currency", "category", "meta_json".
@@ -107,14 +112,9 @@ async def parse_expense_with_llm(msg_body: str) -> Dict[str, Any]:
     """
     try:
         response = await model.generate_content_async(prompt)
-        
-        # Clean the response to get only the JSON part
         text_response = response.text.strip()
         json_str = text_response[text_response.find('{'):text_response.rfind('}')+1]
-        
         parsed = json.loads(json_str)
-        
-        # Ensure all keys are present
         return {
             "amount": parsed.get("amount"),
             "currency": parsed.get("currency"),
@@ -124,7 +124,6 @@ async def parse_expense_with_llm(msg_body: str) -> Dict[str, Any]:
     except Exception as e:
         print(f"Error parsing with LLM: {e}")
         return {"amount": None, "currency": None, "category": None, "meta_json": json.dumps({"error": str(e)})}
-
 
 # --- FastAPI App ---
 app = FastAPI()
@@ -140,7 +139,6 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     setup_database()
-    # Start the Redis consumer in the background
     asyncio.create_task(redis_consumer())
 
 @app.get("/health")
@@ -179,6 +177,7 @@ def get_stats_summary():
 
 # --- Redis Stream Consumer ---
 async def redis_consumer():
+    print(f"Using Gemini model: {GEMINI_MODEL}")
     print("Starting Redis stream consumer...")
     r = aredis.from_url(REDIS_URL, decode_responses=True)
 
@@ -191,33 +190,9 @@ async def redis_consumer():
             return
         print(f"Consumer group '{REDIS_GROUP_NAME}' already exists.")
 
-    async def process_and_ack(messages):
-        if not messages:
-            return
-        print(f"Processing {len(messages)} messages...")
-        for msg_id, msg_data in messages:
-            print(f"-> Processing message {msg_id}: {msg_data.get('body', '')}")
-            await process_message(msg_data, r)
-            await r.xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, msg_id)
-
     while True:
         try:
-            # First, check for any pending messages for this consumer (ID '0')
-            # These are messages that were delivered to us but we never ACKed
-            response = await r.xreadgroup(
-                groupname=REDIS_GROUP_NAME,
-                consumername=REDIS_CONSUMER_NAME,
-                streams={REDIS_STREAM_NAME: '0'},
-                count=10,
-                block=1  # Don't block, just check
-            )
-
-            # If we had pending messages, process them
-            if response:
-                for stream, messages in response:
-                    await process_and_ack(messages)
-
-            # Now, wait for new messages ('>')
+            # Wait for new messages. '>' means messages that have never been delivered to any consumer.
             response = await r.xreadgroup(
                 groupname=REDIS_GROUP_NAME,
                 consumername=REDIS_CONSUMER_NAME,
@@ -226,9 +201,15 @@ async def redis_consumer():
                 block=5000
             )
 
-            if response:
-                for stream, messages in response:
-                    await process_and_ack(messages)
+            if not response:
+
+                continue
+
+            for stream, messages in response:
+                for msg_id, msg_data in messages:
+                    print(f"-> Processing message {msg_id}: {msg_data.get('body', '')}")
+                    await process_message(msg_data, r)
+                    await r.xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, msg_id)
 
         except Exception as e:
             print(f"Error in Redis consumer loop: {e}")
@@ -237,7 +218,7 @@ async def redis_consumer():
 async def process_message(msg_data: Dict[str, Any], r: redis.Redis):
     """Parses and upserts a message into the SQLite database using LLM."""
     try:
-        parsed_expense = await parse_expense_with_llm(msg_data.get('body', ''))
+        parsed_expense = await parse_expense_with_llm(msg_data.get('body', ''), GEMINI_MODEL)
 
         message = Message(
             wid=msg_data['wid'],
@@ -254,10 +235,8 @@ async def process_message(msg_data: Dict[str, Any], r: redis.Redis):
             meta_json=parsed_expense.get('meta_json')
         )
 
-        # Run DB operations in a separate thread to avoid blocking asyncio loop
         await asyncio.to_thread(upsert_message_db, message)
 
-        # If parsing was successful, send confirmation
         if parsed_expense.get('amount') is not None:
             confirmation_payload = json.dumps({
                 "chat_id": message.chat_id,

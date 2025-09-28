@@ -126,7 +126,7 @@ async function processAndPublishMessage(msg, eventType) {
 
             console.log(`DEBUG: Publishing payload from [${eventType}] to Redis:`, payload);
             await redisClient.xAdd(REDIS_STREAM_NAME, '*', payload);
-            console.log(`DEBUG: Successfully published to Redis stream from [${eventType}].`);
+            console.log(`DEBUG: Successfully published to Redis stream '${REDIS_STREAM_NAME}' from [${eventType}].`);;
         } else {
             console.log(`DEBUG: Ignoring message from [${eventType}] because it is not from the target group. Chat: '${chat.name}', Target: '${TARGET_GROUP_NAME}'`);
         }
