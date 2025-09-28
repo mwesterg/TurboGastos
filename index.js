@@ -94,19 +94,26 @@ const redisClient = createClient({ url: REDIS_URL });
 
 redisClient.on('error', (err) => console.error('Redis Client Error', err));
 
-// --- Message Handling ---
-client.on('message', async (msg) => {
-    console.log(`DEBUG: Message received. From: ${msg.from}, Type: ${msg.type}, Body: ${msg.body}`);
+// --- Shared Message Processing Logic ---
+async function processAndPublishMessage(msg, eventType) {
+    console.log(`DEBUG: [${eventType}] event fired. From: ${msg.from}, To: ${msg.to}, Body: ${msg.body}`);
+
+    // Ignore the bot's own automated replies to prevent processing loops
+    if (msg.fromMe && (msg.body.startsWith('✅') || msg.body.startsWith('🤖') || msg.body.startsWith('TurboGastos conectado'))) {
+        console.log(`DEBUG: Ignoring self-sent automated message from [${eventType}] event.`);
+        return;
+    }
+
     try {
         const chat = await msg.getChat();
-        console.log(`DEBUG: Chat obtained. Name: ${chat.name}, IsGroup: ${chat.isGroup}`);
+        console.log(`DEBUG: Chat obtained for [${eventType}]. Name: ${chat.name}, IsGroup: ${chat.isGroup}`);
 
         if (chat.isGroup && chat.name === TARGET_GROUP_NAME) {
-            console.log(`DEBUG: Message is from target group '${TARGET_GROUP_NAME}'. Processing...`);
+            console.log(`DEBUG: Message from [${eventType}] is from target group '${TARGET_GROUP_NAME}'. Processing...`);
             const contact = await msg.getContact();
             const payload = {
                 wid: msg.id._serialized,
-                chat_id: msg.from,
+                chat_id: chat.id._serialized, // Use chat ID for consistency
                 chat_name: chat.name,
                 sender_id: msg.author || msg.from,
                 sender_name: contact.pushname || contact.name || 'Unknown',
@@ -115,23 +122,25 @@ client.on('message', async (msg) => {
                 body: msg.body,
             };
 
-            console.log('DEBUG: Publishing payload to Redis:', payload);
+            console.log(`DEBUG: Publishing payload from [${eventType}] to Redis:`, payload);
             await redisClient.xAdd(REDIS_STREAM_NAME, '*', payload);
-            console.log('DEBUG: Successfully published to Redis stream.');
+            console.log(`DEBUG: Successfully published to Redis stream from [${eventType}].`);
         } else {
-            console.log(`DEBUG: Ignoring message because it is not from the target group. Chat: '${chat.name}', Target: '${TARGET_GROUP_NAME}'`);
+            console.log(`DEBUG: Ignoring message from [${eventType}] because it is not from the target group. Chat: '${chat.name}', Target: '${TARGET_GROUP_NAME}'`);
         }
     } catch (error) {
-        console.error('Error processing message:', error);
+        console.error(`Error processing message from [${eventType}] event:`, error);
     }
-});
+}
 
-// Placeholder for handling messages created by the user themselves
+// --- Message Event Handlers ---
+// Fires for incoming messages from others
+client.on('message', (msg) => processAndPublishMessage(msg, 'message'));
+
+// Fires for messages created by this client, including from the linked device
 client.on('message_create', (msg) => {
-    // This event fires for messages sent by the client, including from the linked device.
-    // We can add logic here later to process self-sent messages.
     if (msg.fromMe) {
-        console.log(`DEBUG: MESSAGE_CREATE event fired for self-sent message. To: ${msg.to}, Body: ${msg.body}`);
+        processAndPublishMessage(msg, 'message_create');
     }
 });
 
