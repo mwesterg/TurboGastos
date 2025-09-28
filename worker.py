@@ -191,8 +191,33 @@ async def redis_consumer():
             return
         print(f"Consumer group '{REDIS_GROUP_NAME}' already exists.")
 
+    async def process_and_ack(messages):
+        if not messages:
+            return
+        print(f"Processing {len(messages)} messages...")
+        for msg_id, msg_data in messages:
+            print(f"-> Processing message {msg_id}: {msg_data.get('body', '')}")
+            await process_message(msg_data, r)
+            await r.xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, msg_id)
+
     while True:
         try:
+            # First, check for any pending messages for this consumer (ID '0')
+            # These are messages that were delivered to us but we never ACKed
+            response = await r.xreadgroup(
+                groupname=REDIS_GROUP_NAME,
+                consumername=REDIS_CONSUMER_NAME,
+                streams={REDIS_STREAM_NAME: '0'},
+                count=10,
+                block=1  # Don't block, just check
+            )
+
+            # If we had pending messages, process them
+            if response:
+                for stream, messages in response:
+                    await process_and_ack(messages)
+
+            # Now, wait for new messages ('>')
             response = await r.xreadgroup(
                 groupname=REDIS_GROUP_NAME,
                 consumername=REDIS_CONSUMER_NAME,
@@ -201,14 +226,9 @@ async def redis_consumer():
                 block=5000
             )
 
-            if not response:
-                continue
-
-            for stream, messages in response:
-                for msg_id, msg_data in messages:
-                    print(f"Processing message {msg_id}: {msg_data.get('body', '')}")
-                    await process_message(msg_data, r)
-                    await r.xack(REDIS_STREAM_NAME, REDIS_GROUP_NAME, msg_id)
+            if response:
+                for stream, messages in response:
+                    await process_and_ack(messages)
 
         except Exception as e:
             print(f"Error in Redis consumer loop: {e}")
