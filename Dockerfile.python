@@ -14,23 +14,23 @@ ENV PATH="/root/.local/bin:$PATH"
 # Create a non-root user and group
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser
 
-# Create app and data directories
+# Create app and data directories and set initial ownership
 WORKDIR /app
 RUN mkdir /data && chown appuser:appuser /data
+RUN chown appuser:appuser /app
 
-# Copy project files and install dependencies using uv
+# Switch to the non-root user for subsequent operations
+USER appuser
+
+# Copy project files and install dependencies (as appuser)
 COPY pyproject.toml ./
 
 # Compile requirements and install them system-wide
-# This is a simple approach for containers; for complex apps, a venv is better.
 RUN uv pip compile pyproject.toml -o requirements.txt
 RUN uv pip install --system -r requirements.txt
 
-# Copy the rest of the application code
+# Copy the rest of the application code (as appuser)
 COPY worker.py .
-
-# Switch to the non-root user
-USER appuser
 
 # Expose the port the app runs on
 EXPOSE 8000

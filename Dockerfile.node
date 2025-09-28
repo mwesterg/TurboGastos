@@ -10,21 +10,22 @@ RUN apt-get update &&     apt-get install -y     chromium     ca-certificates   
 # Create a non-root user and group
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser
 
-# Set up the application directory
+# Set up the application directory and initial permissions
 WORKDIR /app
+RUN chown -R appuser:appuser /app
 
-# Copy package files and install dependencies
+# Create and set permissions for the sessions volume mount point
+RUN mkdir -p /app/sessions && chown -R appuser:appuser /app/sessions
+
+# Switch to the non-root user for subsequent operations
+USER appuser
+
+# Copy package files and install dependencies (as appuser)
 COPY package*.json ./
 RUN npm install --only=production
 
-# Copy the rest of the application code
+# Copy the rest of the application code (as appuser)
 COPY . .
-
-# Create and set permissions for the sessions volume
-RUN mkdir -p /app/sessions && chown -R appuser:appuser /app/sessions
-
-# Switch to the non-root user
-USER appuser
 
 # Expose the port the app runs on
 EXPOSE 3000
