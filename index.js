@@ -203,7 +203,7 @@ async function main() {
         }
     });
 
-    await client.initialize();
+    await client.initialize().catch(_ => _);
     console.log('WhatsApp client initialized.');
 
     app.listen(PORT, () => {
