@@ -28,6 +28,17 @@ REDIS_CONSUMER_NAME = "worker-1"
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
 
+# --- FastAPI App ---
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 # --- API Key Security ---
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
@@ -104,6 +115,24 @@ class StatsSummary(BaseModel):
     total_amount: float
     last_message_ts: Optional[int] = None
 
+# --- Endpoints ---
+@app.on_event("startup")
+async def startup_event():
+    setup_database()
+    asyncio.create_task(redis_consumer())
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+@app.get("/messages", response_model=List[Message], dependencies=[Depends(get_api_key)])
+def get_messages(limit: int = 100):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM messages ORDER BY ts DESC LIMIT ?", (limit,))
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
 @app.get("/messages/pending_clarification", response_model=List[Message], dependencies=[Depends(get_api_key)])
 def get_pending_clarification():
     with get_db_connection() as conn:
@@ -133,6 +162,28 @@ async def clarify_message(wid: str, clarification: Clarification):
 
     return {"status": "clarified"}
 
+@app.get("/messages/{wid}", response_model=Message, dependencies=[Depends(get_api_key)])
+def get_message(wid: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM messages WHERE wid = ?", (wid,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        return dict(row)
+
+@app.get("/stats/summary", response_model=StatsSummary, dependencies=[Depends(get_api_key)])
+def get_stats_summary():
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*), SUM(amount), MAX(ts) FROM messages")
+        count, total, last_ts = cursor.fetchone()
+        return {
+            "message_count": count or 0,
+            "total_amount": total or 0.0,
+            "last_message_ts": last_ts
+        }
+
 # --- Expense Parsing (LLM) ---
 async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, Any]:
     """Parses expense details and generates a conversational reply from a message body."""
@@ -160,17 +211,17 @@ async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, An
 
     Examples:
     - Input: "hola"
-      Output: {{"reply_message":"¡Hola! ¿Cómo puedo ayudarte?","expense_data":null}}
+      Output: {{\"reply_message\":\"¡Hola! ¿Cómo puedo ayudarte?\",\"expense_data\":null}}
     - Input: "supermercado 12.50 usd"
-      Output: {{"reply_message":"Ok, anotado: $12.50 USD en household.","expense_data":{{"amount":12.50,"currency":"USD","category":"household","meta_json":"{{\"source\":\"supermercado\"}}"}}
+      Output: {{\"reply_message\":\"Ok, anotado: $12.50 USD en household.\",\"expense_data\":{{\"amount\":12.50,\"currency\":\"USD\",\"category\":\"household\",\"meta_json\":\"{{\\\"source\\\":\\\"supermercado\\\"}}\"}}}}
     - Input: "zapatillas nuevas 50000"
-      Output: {{"reply_message":"Ok, anotado: $50000 en personal.","expense_data":{{"amount":50000,"currency":"CLP","category":"personal","meta_json":"{{\"source\":\"zapatillas nuevas\"}}"}}
+      Output: {{\"reply_message\":\"Ok, anotado: $50000 en personal.\",\"expense_data\":{{\"amount\":50000,\"currency\":\"CLP\",\"category\":\"personal\",\"meta_json\":\"{{\\\"source\\\":\\\"zapatillas nuevas\\\"}}\"}}}}
     - Input: "pagué la luz 30000"
-      Output: {{"reply_message":"Ok, anotado: $30000 en household.","expense_data":{{"amount":30000,"currency":"CLP","category":"household","meta_json":"{{\"source\":\"pagué la luz\"}}"}}
+      Output: {{\"reply_message\":\"Ok, anotado: $30000 en household.\",\"expense_data\":{{\"amount\":30000,\"currency\":\"CLP\",\"category\":\"household\",\"meta_json\":\"{{\\\"source\\\":\\\"pagué la luz\\\"}}\"}}}}
     - Input: "un café 2500"
-      Output: {{"reply_message":"Ok, anotado: $2500. ¿Es gasto personal o del hogar?","expense_data":{{"amount":2500,"currency":"CLP","category":"unknown","meta_json":"{{\"source\":\"un café\"}}"}}
+      Output: {{\"reply_message\":\"Ok, anotado: $2500. ¿Es gasto personal o del hogar?\",\"expense_data\":{{\"amount\":2500,\"currency\":\"CLP\",\"category\":\"unknown\",\"meta_json\":\"{{\\\"source\\\":\\\"un café\\\"}}\"}}}}
     - Input: "cuanto he gastado?"
-      Output: {{"reply_message":"Aún no puedo responder esa pregunta, ¡pero pronto lo haré!","expense_data":null}}
+      Output: {{\"reply_message\":\"Aún no puedo responder esa pregunta, ¡pero pronto lo haré!\",\"expense_data\":null}}
 
     Text to analyze: "{msg_body}"
     """
@@ -186,56 +237,6 @@ async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, An
     except Exception as e:
         print(f"DEBUG: Error parsing with LLM: {e}")
         return {"reply_message": "Lo siento, no entendí eso. ¿Puedes intentarlo de nuevo?", "expense_data": None}
-
-# --- FastAPI App ---
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-)
-
-@app.on_event("startup")
-async def startup_event():
-    setup_database()
-    asyncio.create_task(redis_consumer())
-
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
-
-@app.get("/messages", response_model=List[Message], dependencies=[Depends(get_api_key)])
-def get_messages(limit: int = 100):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM messages ORDER BY ts DESC LIMIT ?", (limit,))
-        rows = cursor.fetchall()
-        return [dict(row) for row in rows]
-
-@app.get("/messages/{wid}", response_model=Message, dependencies=[Depends(get_api_key)])
-def get_message(wid: str):
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM messages WHERE wid = ?", (wid,))
-        row = cursor.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Message not found")
-        return dict(row)
-
-@app.get("/stats/summary", response_model=StatsSummary, dependencies=[Depends(get_api_key)])
-def get_stats_summary():
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*), SUM(amount), MAX(ts) FROM messages")
-        count, total, last_ts = cursor.fetchone()
-        return {
-            "message_count": count or 0,
-            "total_amount": total or 0.0,
-            "last_message_ts": last_ts
-        }
 
 # --- Redis Stream Consumer ---
 async def redis_consumer():
@@ -264,7 +265,6 @@ async def redis_consumer():
             )
 
             if not response:
-
                 continue
 
             for stream, messages in response:

@@ -57,13 +57,20 @@ docker compose up --build
 ```
 
 On the first run, you will need to authorize the `gmail-reader` service to access your Gmail account.
+
+Run the following command to start the authorization process:
+
+```bash
+docker compose run --service-ports gmail-reader
+```
+
 1.  Look for a URL in the logs of the `gmail-reader` service.
 2.  Copy and paste the URL into your browser.
 3.  Log in to your Google account and grant the requested permissions.
-4.  You will be redirected to a page that shows an authorization code. Copy the code.
+4.  You will be given a code. Copy the code.
 5.  Paste the code back into the terminal where the `gmail-reader` service is running.
 
-The service will then create a `token.json` file in the `gmail_reader` directory, which will be used for future runs.
+The service will then create a `token.json` file in the `gmail_reader` directory, which will be used for future runs. After the `token.json` file is created, you can stop the interactive session (with `Ctrl+C`) and run `docker compose up` to start all the services in the background.
 
 The `ingestor` service will also display a **QR code** in the logs. Scan this code with your WhatsApp mobile app (Link a device) to log in. The session will be saved in the `ingestor/sessions` volume, so you only need to do this once.
 

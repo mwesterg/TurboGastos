@@ -4,6 +4,9 @@ FROM python:3.11-slim
 # Set the working directory in the container.
 WORKDIR /app
 
+# Install dependencies
+RUN apt-get update && apt-get install -y curl lynx && rm -rf /var/lib/apt/lists/*
+
 # Install uv
 RUN pip install uv
 

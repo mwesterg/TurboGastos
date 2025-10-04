@@ -64,8 +64,6 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      args:
-        - REACT_APP_API_KEY=${API_KEY}
     container_name: turbogastos-frontend
     ports:
       - "5173:80"
@@ -91,6 +89,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./gmail_reader:/app
+    ports:
+      - "8081:8081"
     env_file:
       - ./gmail_reader/.env
     depends_on:

@@ -5,7 +5,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import './App.css';
 
 const API_BASE_URL = 'http://localhost:8000';
-const API_KEY = process.env.REACT_APP_API_KEY || 'your-secret-key';
+const API_KEY = process.env.REACT_APP_API_KEY;
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
