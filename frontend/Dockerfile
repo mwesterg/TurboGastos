@@ -9,10 +9,8 @@ COPY package.json ./
 # Install dependencies
 RUN npm install
 
-# Make the build argument available in the container
-ARG REACT_APP_API_KEY
-# Create a .env file with the API key
-RUN echo "REACT_APP_API_KEY=${REACT_APP_API_KEY}" > .env
+# Copy the .env file
+COPY .env ./
 
 # Copy the rest of the application source code
 COPY . .
