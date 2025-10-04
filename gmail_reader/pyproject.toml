@@ -1,0 +1,16 @@
+[project]
+name = "gmail-reader"
+version = "0.1.0"
+description = "Gmail reader for expense tracking"
+requires-python = ">=3.11"
+
+dependencies = [
+    "google-api-python-client",
+    "google-auth-httplib2",
+    "google-auth-oauthlib",
+    "redis"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

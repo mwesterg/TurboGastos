@@ -84,6 +84,19 @@ services:
     environment:
       - DB_PATH=/data/gastos.db
 
+  gmail-reader:
+    build:
+      context: ./gmail_reader
+    container_name: turbogastos-gmail-reader
+    restart: unless-stopped
+    volumes:
+      - ./gmail_reader:/app
+    env_file:
+      - ./gmail_reader/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+
 volumes:
   redis-data:
     driver: local

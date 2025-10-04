@@ -5,8 +5,9 @@ A minimal, containerized WhatsApp group ingestor for tracking expenses. It uses 
 ## Architecture
 
 - **Node.js Ingestor (`ingestor` service)**: Connects to WhatsApp using `whatsapp-web.js`, listens for messages in the `GastosMyM` group, and publishes them to a Redis stream (`gastos:msgs`).
-- **Python Worker (`worker` service)**: Consumes messages from the Redis stream, parses them (currently a stub), and upserts them into an SQLite database. It exposes a FastAPI for reading the data.
-- **Redis (`redis` service)**: Acts as the message broker between the ingestor and the worker.
+- **Gmail Reader (`gmail-reader` service)**: Connects to the Gmail API, searches for specific emails, and publishes them to the same Redis stream.
+- **Python Worker (`worker` service)**: Consumes messages from the Redis stream, parses them using an LLM, and upserts them into an SQLite database. It exposes a FastAPI for reading the data.
+- **Redis (`redis` service)**: Acts as the message broker between the ingestors and the worker.
 - **Frontend (`frontend` service)**: A React-based web application to visualize the expense data.
 - **MCP-SQLite (`mcp-sqlite` service)**: Exposes the SQLite database over a network connection, allowing AI agents to interact with the data.
 - **Docker Compose**: Orchestrates the entire application stack.
@@ -22,18 +23,32 @@ This setup is designed to be compatible with both x86-64 and ARM64 (e.g., Raspbe
 
 ### 1. Environment Setup
 
-The application uses `.env` files located in the `ingestor` and `worker` directories.
+The application uses `.env` files located in the `ingestor`, `worker` and `gmail_reader` directories.
 
 First, create the `.env` files by copying the provided examples:
 
 ```bash
 cp ingestor/.env.example ingestor/.env
 cp worker/.env.example worker/.env
+cp gmail_reader/.env.example gmail_reader/.env
 ```
 
-Now, edit the `.env` files and set your `API_KEY` in both files.
+Now, edit the `.env` files and set your `API_KEY` in the `ingestor` and `worker` `.env` files.
 
-### 2. First Run
+### 2. Gmail Reader Setup
+
+The `gmail-reader` service requires Google API credentials to read your emails.
+
+1.  **Enable the Gmail API**: Go to the [Google Cloud Console](https://console.cloud.google.com/apis/library/gmail.googleapis.com) and enable the Gmail API for your project.
+2.  **Create OAuth 2.0 Credentials**:
+    *   Go to the [Credentials page](https://console.cloud.google.com/apis/credentials) in the Google Cloud Console.
+    *   Click "Create Credentials" and choose "OAuth client ID".
+    *   Select "Desktop app" as the application type.
+    *   Click "Create".
+    *   Click "Download JSON" to download your credentials file.
+3.  **Place Credentials File**: Rename the downloaded file to `credentials.json` and place it in the `gmail_reader` directory.
+
+### 3. First Run
 
 Build and start all the services using Docker Compose:
 
@@ -41,9 +56,18 @@ Build and start all the services using Docker Compose:
 docker compose up --build
 ```
 
-On the first run, the `ingestor` service will display a **QR code** in the logs. Scan this code with your WhatsApp mobile app (Link a device) to log in. The session will be saved in the `ingestor/sessions` volume, so you only need to do this once.
+On the first run, you will need to authorize the `gmail-reader` service to access your Gmail account.
+1.  Look for a URL in the logs of the `gmail-reader` service.
+2.  Copy and paste the URL into your browser.
+3.  Log in to your Google account and grant the requested permissions.
+4.  You will be redirected to a page that shows an authorization code. Copy the code.
+5.  Paste the code back into the terminal where the `gmail-reader` service is running.
 
-### 3. Health Checks
+The service will then create a `token.json` file in the `gmail_reader` directory, which will be used for future runs.
+
+The `ingestor` service will also display a **QR code** in the logs. Scan this code with your WhatsApp mobile app (Link a device) to log in. The session will be saved in the `ingestor/sessions` volume, so you only need to do this once.
+
+### 4. Health Checks
 
 Once the services are running, you can check their health:
 
@@ -95,16 +119,18 @@ This allows you to ask questions about your data in natural language, and the AI
 
 This project uses Docker volumes to persist data:
 
-- **`ingestor/sessions`**: Stores the WhatsApp session data, so you don't have to scan the QR code on every restart.
+- **`ingestor/sessions`**: Stores the WhatsApp session data.
+- **`gmail_reader/token.json`**: Stores the Gmail API access token.
 - **`data`**: Stores the `gastos.db` SQLite database file.
 - **`redis-data`**: Persists Redis data across restarts.
 
 ## Troubleshooting
 
-- **Puppeteer/Chromium Issues**: The `ingestor/Dockerfile.node` is configured to install and use Chromium from the distribution's package manager, which is the recommended approach for ARM-based devices like the Raspberry Pi. The `PUPPETEER_EXECUTABLE_PATH` is set to `/usr/bin/chromium`.
-- **`BUSYGROUP` Error in Worker Logs**: If you see a `BUSYGROUP Consumer group ... already exists` error from the Python worker on startup, this is normal. It just means the Redis consumer group was already created on a previous run.
-- **ARM Architecture Notes**: The base images (`node:20-bookworm-slim`, `python:3.11-slim`) are multi-architecture and should work correctly on Raspberry Pi (arm64). The Chromium package name (`chromium`) is also standard for Debian Bookworm.
+- **Puppeteer/Chromium Issues**: The `ingestor/Dockerfile.node` is configured to install and use Chromium from the distribution's package manager.
+- **`BUSYGROUP` Error in Worker Logs**: This is normal and means the Redis consumer group already exists.
+- **ARM Architecture Notes**: The base images are multi-architecture and should work on Raspberry Pi (arm64).
 
 ## Security Note
 
-Using `whatsapp-web.js` is an unofficial method of connecting to WhatsApp. Use this application at your own risk. It is not endorsed by WhatsApp and may violate their terms of service.
+Using `whatsapp-web.js` is an unofficial method of connecting to WhatsApp. Use this application at your own risk.
+This application also requires access to your Gmail account. Grant access only if you trust the application and understand the risks.
