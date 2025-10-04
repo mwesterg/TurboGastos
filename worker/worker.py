@@ -63,6 +63,22 @@ def setup_database():
             meta_json TEXT
         );
         """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_clarification (
+            wid TEXT PRIMARY KEY,
+            chat_id TEXT,
+            chat_name TEXT,
+            sender_id TEXT,
+            sender_name TEXT,
+            ts INTEGER,
+            type TEXT,
+            body TEXT,
+            amount REAL,
+            currency TEXT,
+            category TEXT,
+            meta_json TEXT
+        );
+        """)
         conn.commit()
 
 # --- Pydantic Models ---
@@ -80,10 +96,42 @@ class Message(BaseModel):
     category: Optional[str] = None
     meta_json: Optional[str] = None
 
+class Clarification(BaseModel):
+    category: str
+
 class StatsSummary(BaseModel):
     message_count: int
     total_amount: float
     last_message_ts: Optional[int] = None
+
+@app.get("/messages/pending_clarification", response_model=List[Message], dependencies=[Depends(get_api_key)])
+def get_pending_clarification():
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pending_clarification ORDER BY ts DESC")
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+@app.post("/messages/clarify/{wid}", dependencies=[Depends(get_api_key)])
+async def clarify_message(wid: str, clarification: Clarification):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pending_clarification WHERE wid = ?", (wid,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found in pending_clarification")
+        
+        message_data = dict(row)
+        message_data['category'] = clarification.category
+
+        message = Message(**message_data)
+        
+        upsert_message_db(message)
+
+        cursor.execute("DELETE FROM pending_clarification WHERE wid = ?", (wid,))
+        conn.commit()
+
+    return {"status": "clarified"}
 
 # --- Expense Parsing (LLM) ---
 async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, Any]:
@@ -105,15 +153,24 @@ async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, An
 
     1.  "reply_message": A short, conversational reply in Spanish. If the message is an expense, confirm it. If it's a greeting or question, answer it. If it's nonsense, be politely confused.
     2.  "expense_data": An object with expense details. If the message is NOT an expense, this MUST be null.
-        - If it IS an expense, the object must contain these keys: "amount" (float), "currency" (string, default "CLP"), "category" (string from list: Food, Transport, Shopping, Utilities, Health, Entertainment, Other), and "meta_json" (a JSON string for extra data).
+        - If it IS an expense, the object must contain these keys: "amount" (float), "currency" (string, default "CLP"), "category" (string from list: "household", "personal", or "unknown"), and "meta_json" (a JSON string for extra data).
+        - Classify the expense as 'household' if it seems to be for the home (e.g., groceries, utilities, rent).
+        - Classify it as 'personal' if it's for an individual (e.g., clothing, hobbies, personal items).
+        - If you are unsure, classify it as 'unknown'.
 
     Examples:
     - Input: "hola"
-      Output: {{\"reply_message\":\"¡Hola! ¿Cómo puedo ayudarte?\",\"expense_data\":null}}
+      Output: {{"reply_message":"¡Hola! ¿Cómo puedo ayudarte?","expense_data":null}}
     - Input: "supermercado 12.50 usd"
-      Output: {{\"reply_message\":\"Ok, anotado: $12.50 USD en Shopping.\",\"expense_data\":{{\"amount\":12.50,\"currency\":\"USD\",\"category\":\"Shopping\",\"meta_json\":\"{{\\\"source\\\":\\\"supermercado\\\"}}\"}}}}
+      Output: {{"reply_message":"Ok, anotado: $12.50 USD en household.","expense_data":{{"amount":12.50,"currency":"USD","category":"household","meta_json":"{{\"source\":\"supermercado\"}}"}}
+    - Input: "zapatillas nuevas 50000"
+      Output: {{"reply_message":"Ok, anotado: $50000 en personal.","expense_data":{{"amount":50000,"currency":"CLP","category":"personal","meta_json":"{{\"source\":\"zapatillas nuevas\"}}"}}
+    - Input: "pagué la luz 30000"
+      Output: {{"reply_message":"Ok, anotado: $30000 en household.","expense_data":{{"amount":30000,"currency":"CLP","category":"household","meta_json":"{{\"source\":\"pagué la luz\"}}"}}
+    - Input: "un café 2500"
+      Output: {{"reply_message":"Ok, anotado: $2500. ¿Es gasto personal o del hogar?","expense_data":{{"amount":2500,"currency":"CLP","category":"unknown","meta_json":"{{\"source\":\"un café\"}}"}}
     - Input: "cuanto he gastado?"
-      Output: {{\"reply_message\":\"Aún no puedo responder esa pregunta, ¡pero pronto lo haré!\",\"expense_data\":null}}
+      Output: {{"reply_message":"Aún no puedo responder esa pregunta, ¡pero pronto lo haré!","expense_data":null}}
 
     Text to analyze: "{msg_body}"
     """
@@ -243,7 +300,6 @@ async def process_message(msg_data: Dict[str, Any], r: redis.Redis):
 
         # Only save to database if the expense data is valid
         if expense_data and expense_data.get('amount') is not None:
-            print("DEBUG: Valid expense data found. Upserting to database...")
             message = Message(
                 wid=msg_data['wid'],
                 chat_id=msg_data['chat_id'],
@@ -258,13 +314,40 @@ async def process_message(msg_data: Dict[str, Any], r: redis.Redis):
                 category=expense_data.get('category'),
                 meta_json=expense_data.get('meta_json')
             )
-            await asyncio.to_thread(upsert_message_db, message)
-            print("DEBUG: Database upsert complete.")
+            if message.category == "unknown":
+                print("DEBUG: Expense category is unknown. Inserting into pending_clarification...")
+                await asyncio.to_thread(upsert_pending_clarification_db, message)
+                print("DEBUG: Database upsert to pending_clarification complete.")
+            else:
+                print("DEBUG: Valid expense data found. Upserting to database...")
+                await asyncio.to_thread(upsert_message_db, message)
+                print("DEBUG: Database upsert complete.")
         else:
             print("DEBUG: No valid expense data found. Skipping database insert.")
 
     except Exception as e:
         print(f"Error processing message for DB: {e}")
+
+def upsert_pending_clarification_db(message: Message):
+    """Function to perform the database upsert operation for pending clarifications."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO pending_clarification (wid, chat_id, chat_name, sender_id, sender_name, ts, type, body, amount, currency, category, meta_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(wid) DO UPDATE SET
+            ts=excluded.ts,
+            body=excluded.body,
+            amount=excluded.amount,
+            currency=excluded.currency,
+            category=excluded.category,
+            meta_json=excluded.meta_json;
+        """, (
+            message.wid, message.chat_id, message.chat_name, message.sender_id, message.sender_name,
+            message.ts, message.type, message.body, message.amount, message.currency,
+            message.category, message.meta_json
+        ))
+        conn.commit()
 
 def upsert_message_db(message: Message):
     """Function to perform the database upsert operation."""
