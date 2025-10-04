@@ -4,6 +4,7 @@ GOAL
 - Node "ingestor": listen ONLY to WhatsApp group "GastosMyM" using whatsapp-web.js, publish JSON payloads to Redis Stream "gastos:msgs", and expose GET /groups + /health (API key protected).
 - Python "worker": consume Redis Stream with consumer groups, parse expenses using an LLM to categorize them as "personal" or "household", upsert into SQLite, and expose FastAPI read APIs. Use uv for dependency management.
 - `mcp-sqlite` "database agent": Expose the SQLite database over a network connection, allowing AI agents to interact with the data.
+- `gmail-reader`: Connects to the Gmail API, searches for specific emails, and publishes them to the same Redis stream.
 - Run everything via docker-compose on a Raspberry Pi or x86. Keep images small, Pi-friendly, and include Chromium for puppeteer.
 
 STRICT REQUIREMENTS (carry over from earlier prompt, plus Docker/uv changes)
@@ -38,7 +39,14 @@ STRICT REQUIREMENTS (carry over from earlier prompt, plus Docker/uv changes)
 - `mcp-sqlite` service (`mcp-sqlite` service):
     - Resides in the `mcp_service/` directory.
     - Exposes the SQLite database over port 8080 for AI agent interaction.
-    - Files: `mcp_service/run.py`, `mcp_service/pyproject.toml`, `mcp_service/Dockerfile`.
+    - Files: `mcp_service/Dockerfile`, `mcp_service/metadata.yml`.
+
+- `gmail-reader` service (`gmail-reader` service):
+    - Resides in the `gmail_reader/` directory.
+    - Connects to the Gmail API to read emails.
+    - Handles OAuth 2.0 flow for authorization.
+    - Publishes email content to the `gastos:msgs` Redis stream.
+    - Files: `gmail_reader/run.py`, `gmail_reader/pyproject.toml`, `gmail_reader/Dockerfile`, `gmail_reader/.env.example`.
 
 - Dockerization:
   - Provide docker-compose.yml with services:
@@ -46,7 +54,8 @@ STRICT REQUIREMENTS (carry over from earlier prompt, plus Docker/uv changes)
     2) ingestor: built from `ingestor/Dockerfile.node`.
     3) worker: built from `worker/Dockerfile.python`.
     4) mcp-sqlite: built from `mcp_service/Dockerfile`.
-    5) frontend: built from `frontend/Dockerfile`.
+    5) gmail-reader: built from `gmail_reader/Dockerfile`.
+    6) frontend: built from `frontend/Dockerfile`.
   - Volumes: sessions, data, redis-data.
 
 - Dockerfile.node (Pi-friendly):
@@ -55,7 +64,7 @@ STRICT REQUIREMENTS (carry over from earlier prompt, plus Docker/uv changes)
   - Sets PUPPETEER_SKIP_DOWNLOAD=1 and PUPPETEER_EXECUTABLE_PATH.
 
 - Dockerfile.python (uv usage):
-  - Base: python:3.11-slim.
+  - Base: python:3.11-slim or python:3.12-slim.
   - Installs uv.
   - Installs dependencies from `pyproject.toml` using uv.
 
@@ -70,19 +79,22 @@ STRICT REQUIREMENTS (carry over from earlier prompt, plus Docker/uv changes)
   4) `worker/worker.py`
   5) `worker/pyproject.toml`
   6) `worker/.env.example`
-  7) `mcp_service/run.py`
-  8) `mcp_service/pyproject.toml`
-  9) `mcp_service/Dockerfile`
-  10) `docker-compose.yml`
-  11) `.dockerignore`
-  12) `README.md` with run steps
+  7) `mcp_service/Dockerfile`
+  8) `mcp_service/metadata.yml`
+  9) `gmail_reader/run.py`
+  10) `gmail_reader/pyproject.toml`
+  11) `gmail_reader/Dockerfile`
+  12) `gmail_reader/.env.example`
+  13) `docker-compose.yml`
+  14) `.dockerignore`
+  15) `README.md` with run steps
 
 - README.md must include:
   - Env setup for all services.
   - `docker compose up --build` command.
   - Health check examples.
   - API call examples.
-  - Explanation of the new `mcp-sqlite` service.
+  - Explanation of the new `mcp-sqlite` and `gmail-reader` services.
 
 STYLE
 - Concise, production-like code.
