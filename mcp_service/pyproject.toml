@@ -1,0 +1,13 @@
+[project]
+name = "mcp-sqlite-service"
+version = "0.1.0"
+description = "MCP-SQLite server"
+requires-python = ">=3.11"
+
+dependencies = [
+    "mcp-sqlite"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
