@@ -5,19 +5,14 @@ README.md
 GEMINI.md
 
 # Node.js
-node_modules
-npm-debug.log
+ingestor/node_modules
+ingestor/npm-debug.log
+ingestor/sessions
 
 # Python
-__pycache__
-*.pyc
-.venv
-requirements.txt
-
-# Docker
-Dockerfile.node
-Dockerfile.python
-docker-compose.yml
+worker/__pycache__
+worker/*.pyc
+worker/.venv
 
 # Data and sessions (managed by volumes)
 data/
