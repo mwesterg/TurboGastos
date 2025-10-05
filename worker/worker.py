@@ -71,6 +71,7 @@ def setup_database():
             amount REAL,
             currency TEXT,
             category TEXT,
+            subcategory TEXT,
             meta_json TEXT
         );
         """)
@@ -87,6 +88,7 @@ def setup_database():
             amount REAL,
             currency TEXT,
             category TEXT,
+            subcategory TEXT,
             meta_json TEXT
         );
         """)
@@ -105,10 +107,12 @@ class Message(BaseModel):
     amount: Optional[float] = None
     currency: Optional[str] = None
     category: Optional[str] = None
+    subcategory: Optional[str] = None
     meta_json: Optional[str] = None
 
 class Clarification(BaseModel):
     category: str
+    subcategory: Optional[str] = None
 
 class StatsSummary(BaseModel):
     message_count: int
@@ -152,6 +156,7 @@ async def clarify_message(wid: str, clarification: Clarification):
         
         message_data = dict(row)
         message_data['category'] = clarification.category
+        message_data['subcategory'] = clarification.subcategory
 
         message = Message(**message_data)
         
@@ -204,22 +209,28 @@ async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, An
 
     1.  "reply_message": A short, conversational reply in Spanish. If the message is an expense, confirm it. If it's a greeting or question, answer it. If it's nonsense, be politely confused.
     2.  "expense_data": An object with expense details. If the message is NOT an expense, this MUST be null.
-        - If it IS an expense, the object must contain these keys: "amount" (float), "currency" (string, default "CLP"), "category" (string from list: "household", "personal", or "unknown"), and "meta_json" (a JSON string for extra data).
+        - If it IS an expense, the object must contain these keys:
+            - "amount" (float)
+            - "currency" (string, default "CLP")
+            - "category" (string from list: "household", "personal", or "unknown")
+            - "subcategory" (string from list: "food", "transport", "utilities", "rent", "shopping", "entertainment", "other", or null)
+            - "meta_json" (a JSON string for extra data)
         - Classify the expense as 'household' if it seems to be for the home (e.g., groceries, utilities, rent).
         - Classify it as 'personal' if it's for an individual (e.g., clothing, hobbies, personal items).
-        - If you are unsure, classify it as 'unknown'.
+        - If you are unsure about the category, classify it as 'unknown'.
+        - Based on the item, classify the subcategory. If unsure, the subcategory can be null.
 
     Examples:
     - Input: "hola"
       Output: {{\"reply_message\":\"¡Hola! ¿Cómo puedo ayudarte?\",\"expense_data\":null}}
     - Input: "supermercado 12.50 usd"
-      Output: {{\"reply_message\":\"Ok, anotado: $12.50 USD en household.\",\"expense_data\":{{\"amount\":12.50,\"currency\":\"USD\",\"category\":\"household\",\"meta_json\":\"{{\\\"source\\\":\\\"supermercado\\\"}}\"}}}}
+      Output: {{\"reply_message\":\"Ok, anotado: $12.50 USD en household (food).\",\"expense_data\":{{\"amount\":12.50,\"currency\":\"USD\",\"category\":\"household\",\"subcategory\":\"food\",\"meta_json\":\"{{\\\"source\\\":\\\"supermercado\\\"}}\"}}}}
     - Input: "zapatillas nuevas 50000"
-      Output: {{\"reply_message\":\"Ok, anotado: $50000 en personal.\",\"expense_data\":{{\"amount\":50000,\"currency\":\"CLP\",\"category\":\"personal\",\"meta_json\":\"{{\\\"source\\\":\\\"zapatillas nuevas\\\"}}\"}}}}
+      Output: {{\"reply_message\":\"Ok, anotado: $50000 en personal (shopping).\",\"expense_data\":{{\"amount\":50000,\"currency\":\"CLP\",\"category\":\"personal\",\"subcategory\":\"shopping\",\"meta_json\":\"{{\\\"source\\\":\\\"zapatillas nuevas\\\"}}\"}}}}
     - Input: "pagué la luz 30000"
-      Output: {{\"reply_message\":\"Ok, anotado: $30000 en household.\",\"expense_data\":{{\"amount\":30000,\"currency\":\"CLP\",\"category\":\"household\",\"meta_json\":\"{{\\\"source\\\":\\\"pagué la luz\\\"}}\"}}}}
+      Output: {{\"reply_message\":\"Ok, anotado: $30000 en household (utilities).\",\"expense_data\":{{\"amount\":30000,\"currency\":\"CLP\",\"category\":\"household\",\"subcategory\":\"utilities\",\"meta_json\":\"{{\\\"source\\\":\\\"pagué la luz\\\"}}\"}}}}
     - Input: "un café 2500"
-      Output: {{\"reply_message\":\"Ok, anotado: $2500. ¿Es gasto personal o del hogar?\",\"expense_data\":{{\"amount\":2500,\"currency\":\"CLP\",\"category\":\"unknown\",\"meta_json\":\"{{\\\"source\\\":\\\"un café\\\"}}\"}}}}
+      Output: {{\"reply_message\":\"Ok, anotado: $2500. ¿Es gasto personal o del hogar?\",\"expense_data\":{{\"amount\":2500,\"currency\":\"CLP\",\"category\":\"unknown\",\"subcategory\":\"food\",\"meta_json\":\"{{\\\"source\\\":\\\"un café\\\"}}\"}}}}
     - Input: "cuanto he gastado?"
       Output: {{\"reply_message\":\"Aún no puedo responder esa pregunta, ¡pero pronto lo haré!\",\"expense_data\":null}}
 
@@ -235,7 +246,7 @@ async def parse_expense_with_llm(msg_body: str, model_name: str) -> Dict[str, An
         parsed = json.loads(json_str)
         return parsed # Return the full object { "reply_message": ..., "expense_data": ... }
     except Exception as e:
-        print(f"DEBUG: Error parsing with LLM: {e}")
+        print(f"Error parsing with LLM: {e}")
         return {"reply_message": "Lo siento, no entendí eso. ¿Puedes intentarlo de nuevo?", "expense_data": None}
 
 # --- Redis Stream Consumer ---
@@ -312,6 +323,7 @@ async def process_message(msg_data: Dict[str, Any], r: redis.Redis):
                 amount=expense_data.get('amount'),
                 currency=expense_data.get('currency'),
                 category=expense_data.get('category'),
+                subcategory=expense_data.get('subcategory'),
                 meta_json=expense_data.get('meta_json')
             )
             if message.category == "unknown":
@@ -333,19 +345,20 @@ def upsert_pending_clarification_db(message: Message):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-        INSERT INTO pending_clarification (wid, chat_id, chat_name, sender_id, sender_name, ts, type, body, amount, currency, category, meta_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO pending_clarification (wid, chat_id, chat_name, sender_id, sender_name, ts, type, body, amount, currency, category, subcategory, meta_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(wid) DO UPDATE SET
             ts=excluded.ts,
             body=excluded.body,
             amount=excluded.amount,
             currency=excluded.currency,
             category=excluded.category,
+            subcategory=excluded.subcategory,
             meta_json=excluded.meta_json;
         """, (
             message.wid, message.chat_id, message.chat_name, message.sender_id, message.sender_name,
             message.ts, message.type, message.body, message.amount, message.currency,
-            message.category, message.meta_json
+            message.category, message.subcategory, message.meta_json
         ))
         conn.commit()
 
@@ -354,19 +367,20 @@ def upsert_message_db(message: Message):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-        INSERT INTO messages (wid, chat_id, chat_name, sender_id, sender_name, ts, type, body, amount, currency, category, meta_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO messages (wid, chat_id, chat_name, sender_id, sender_name, ts, type, body, amount, currency, category, subcategory, meta_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(wid) DO UPDATE SET
             ts=excluded.ts,
             body=excluded.body,
             amount=excluded.amount,
             currency=excluded.currency,
             category=excluded.category,
+            subcategory=excluded.subcategory,
             meta_json=excluded.meta_json;
         """, (
             message.wid, message.chat_id, message.chat_name, message.sender_id, message.sender_name,
             message.ts, message.type, message.body, message.amount, message.currency,
-            message.category, message.meta_json
+            message.category, message.subcategory, message.meta_json
         ))
         conn.commit()
 

@@ -81,6 +81,9 @@ services:
       - "8080:8080"
     environment:
       - DB_PATH=/data/gastos.db
+    depends_on:
+      worker:
+        condition: service_healthy
 
   gmail-reader:
     build:
@@ -93,6 +96,8 @@ services:
       - "8081:8081"
     env_file:
       - ./gmail_reader/.env
+    environment:
+      - PYTHONUNBUFFERED=1
     depends_on:
       redis:
         condition: service_healthy

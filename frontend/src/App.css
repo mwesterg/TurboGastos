@@ -1,11 +1,25 @@
+/* Use variables from index.css for consistency */
 body {
-  background-color: #f8f9fa;
+  background-color: var(--bg-color);
 }
 
 .App {
   padding: 20px;
 }
 
+/* Override Bootstrap dark theme for cards if needed */
+.card {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+}
+
 .card-header {
   font-weight: bold;
+  background-color: rgba(0,0,0,0.2);
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Make recharts text more readable in dark mode */
+.recharts-text {
+  fill: var(--text-color) !important;
 }

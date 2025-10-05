@@ -9,8 +9,11 @@ const { createClient } = require('redis');
 const API_KEY = process.env.API_KEY || 'your-secret-key';
 const PORT = process.env.PORT || 3000;
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const TARGET_GROUP_NAME = 'GastosMyM';
+const TARGET_GROUP_NAME = process.env.WHATSAPP_GROUP_NAME || 'GastosMyM';
 const REDIS_STREAM_NAME = 'gastos:msgs';
+
+// --- Globals ---
+let targetGroupId = null;
 
 // --- Express App Setup ---
 const app = express();
@@ -41,39 +44,23 @@ client.on('qr', qr => {
 });
 
 client.on('ready', async () => {
-    console.log('WhatsApp client is ready! Waiting for full connection before sending startup message...');
+    console.log('WhatsApp client is ready! Searching for target group...');
 
-    // Wait up to 30 seconds for the client to be fully connected
     try {
-        let state = await client.getState();
-        let waitTime = 0;
-        const maxWaitTime = 30; // 30 seconds
-
-        while (state !== 'CONNECTED' && waitTime < maxWaitTime) {
-            console.log(`Current state: ${state}. Waiting for connection... (${waitTime}s)`);
-            await new Promise(resolve => setTimeout(resolve, 1000)); // wait 1 second
-            state = await client.getState();
-            waitTime++;
-        }
-
-        if (state !== 'CONNECTED') {
-            console.error(`Error: Client did not reach a fully connected state within ${maxWaitTime} seconds.`);
-            return;
-        }
-
-        console.log('Client is fully connected. Sending startup message...');
         const chats = await client.getChats();
         const targetGroup = chats.find(chat => chat.isGroup && chat.name === TARGET_GROUP_NAME);
 
         if (targetGroup) {
+            targetGroupId = targetGroup.id._serialized;
+            console.log(`Target group '${TARGET_GROUP_NAME}' found with ID: ${targetGroupId}`);
             const msg = '🤖: TurboGastos conectado y listo para procesar gastos.';
-            await client.sendMessage(targetGroup.id._serialized, msg);
+            await client.sendMessage(targetGroupId, msg);
             console.log(`Successfully sent startup message to '${TARGET_GROUP_NAME}'.`);
         } else {
-            console.warn(`Warning: Could not find target group '${TARGET_GROUP_NAME}' to send startup message.`);
+            console.warn(`Warning: Could not find target group '${TARGET_GROUP_NAME}'. No messages will be processed or sent.`);
         }
     } catch (error) {
-        console.error('Error during ready state check or message sending:', error);
+        console.error('Error during ready event:', error);
     }
 });
 
@@ -96,23 +83,21 @@ redisClient.on('error', (err) => console.error('Redis Client Error', err));
 
 // --- Shared Message Processing Logic ---
 async function processAndPublishMessage(msg, eventType) {
-    console.log(`DEBUG: [${eventType}] event fired. From: ${msg.from}, To: ${msg.to}, Body: ${msg.body}`);
-
     // Ignore the bot's own automated replies to prevent processing loops
     if (msg.fromMe && msg.body.startsWith('🤖:')) {
-        console.log(`DEBUG: Ignoring self-sent automated message from [${eventType}] event.`);
+        console.log(`DEBUG: Ignoring self-sent automated message from [${eventType}].`);
         return;
     }
 
+    // Only process if the target group has been found
+    if (!targetGroupId) return;
+
     try {
         const chat = await msg.getChat();
-        console.log(`DEBUG: Chat obtained for [${eventType}]. Name: ${chat.name}, IsGroup: ${chat.isGroup}`);
-
-        if (chat.isGroup && chat.name === TARGET_GROUP_NAME) {
-            console.log(`DEBUG: Message from [${eventType}] is from target group '${TARGET_GROUP_NAME}'. Processing...`);
+        if (chat.id._serialized === targetGroupId) {
+            console.log(`DEBUG: Message from '${TARGET_GROUP_NAME}' is being processed...`);
             const contact = await msg.getContact();
             
-            // Ensure all payload values are strings for Redis
             const payload = {
                 wid: String(msg.id._serialized),
                 chat_id: String(chat.id._serialized),
@@ -124,11 +109,8 @@ async function processAndPublishMessage(msg, eventType) {
                 body: String(msg.body),
             };
 
-            console.log(`DEBUG: Publishing payload from [${eventType}] to Redis:`, payload);
             await redisClient.xAdd(REDIS_STREAM_NAME, '*', payload);
-            console.log(`DEBUG: Successfully published to Redis stream '${REDIS_STREAM_NAME}' from [${eventType}].`);;
-        } else {
-            console.log(`DEBUG: Ignoring message from [${eventType}] because it is not from the target group. Chat: '${chat.name}', Target: '${TARGET_GROUP_NAME}'`);
+            console.log(`DEBUG: Successfully published to Redis stream '${REDIS_STREAM_NAME}'.`);
         }
     } catch (error) {
         console.error(`Error processing message from [${eventType}] event:`, error);
@@ -136,28 +118,12 @@ async function processAndPublishMessage(msg, eventType) {
 }
 
 // --- Message Event Handlers ---
-// Fires for incoming messages from others
 client.on('message', (msg) => processAndPublishMessage(msg, 'message'));
 
-// Fires for messages created by this client, including from the linked device
 client.on('message_create', (msg) => {
     if (msg.fromMe) {
         processAndPublishMessage(msg, 'message_create');
     }
-});
-
-client.on('change_state', s => console.log('[WWebJS] State:', s));
-client.on('auth_failure', msg => console.error('[WWebJS] AUTH FAILURE:', msg));
-client.on('disconnected', reason => {
-  console.warn('[WWebJS] DISCONNECTED:', reason);
-  // Optionally: process.exit(1) and rely on Docker restart policy
-});
-
-
-process.on('SIGINT', async () => {
-  console.log('Shutting down…');
-  try { await client.destroy(); } catch {}
-  process.exit(0);
 });
 
 // --- API Endpoints ---
@@ -183,27 +149,33 @@ async function main() {
     await redisClient.connect();
     console.log('Connected to Redis for publishing.');
 
-    // Create a dedicated subscriber client
     const redisSubscriber = redisClient.duplicate();
     await redisSubscriber.connect();
-    console.log('Connected to Redis for subscribing.');
+    console.log('Connected to Redis for subscribing to confirmations.');
 
-    // Subscribe to the confirmation channel
     await redisSubscriber.subscribe('gastos:confirmations', async (message) => {
+        if (!targetGroupId) {
+            console.error('Cannot send confirmation: Target group not found.');
+            return;
+        }
+
         try {
-            const { chat_id, original_wid, reply_message } = JSON.parse(message);
-            if (chat_id && original_wid && reply_message) {
-                console.log(`Sending dynamic reply to ${chat_id}: "${reply_message}"`);
-                // Prepend the standard bot prefix to the AI-generated message
+            const { original_wid, reply_message } = JSON.parse(message);
+            if (reply_message) {
+                console.log(`Sending reply to ${TARGET_GROUP_NAME}: "${reply_message}"`);
                 const final_message = `🤖: ${reply_message}`;
-                await client.sendMessage(chat_id, final_message, { quotedMessageId: original_wid });
+                
+                // Only quote the original message if it was a real WhatsApp message (not from Gmail)
+                const options = original_wid ? { quotedMessageId: original_wid } : {};
+                
+                await client.sendMessage(targetGroupId, final_message, options);
             }
         } catch (error) {
             console.error('Error handling confirmation message:', error);
         }
     });
 
-    await client.initialize().catch(_ => _);
+    await client.initialize().catch(console.error);
     console.log('WhatsApp client initialized.');
 
     app.listen(PORT, () => {

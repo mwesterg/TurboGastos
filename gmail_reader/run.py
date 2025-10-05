@@ -1,3 +1,4 @@
+import datetime
 import os
 import base64
 import json
@@ -12,7 +13,7 @@ from googleapiclient.discovery import build
 # The file token.json stores the user's access and refresh tokens, and is
 # created automatically when the authorization flow completes for the first
 # time.
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 TOKEN_PATH = 'token.json'
 CREDENTIALS_PATH = 'credentials.json'
 REDIS_URL = os.getenv("REDIS_URL")
@@ -84,19 +85,26 @@ def get_email_content(service, msg_id):
             subject = header['value']
             break
 
+    body = ''
     if 'parts' in payload:
-        parts = payload['parts']
-        data = parts[0]['body']['data']
-    else:
-        data = payload['body']['data']
+        for part in payload['parts']:
+            if part['mimeType'] in ['text/plain', 'text/html']:
+                data = part['body'].get('data')
+                if data:
+                    body = base64.urlsafe_b64decode(data).decode('utf-8')
+                    break
+    elif 'body' in payload:
+        data = payload['body'].get('data')
+        if data:
+            body = base64.urlsafe_b64decode(data).decode('utf-8')
 
-    data = data.replace("-", "+").replace("_", "/")
-    decoded_data = base64.b64decode(data)
-    return subject, decoded_data.decode('utf-8')
+    return subject, body
 
 def publish_to_redis(r, message):
     """Publish a message to the Redis stream."""
     r.xadd(REDIS_STREAM_NAME, message)
+
+import datetime
 
 def main():
     """
@@ -111,10 +119,14 @@ def main():
 
     r = redis.from_url(REDIS_URL, decode_responses=True)
 
+    # Get the timestamp for the beginning of today
+    today = datetime.date.today()
+    today_timestamp = int(time.mktime(today.timetuple()))
+
     while True:
         print("Searching for new emails...")
-        # Search for unread emails from "Banco de Chile" with the specified subject
-        query = 'from:"Banco de Chile" subject:"Compra con Tarjeta de Crédito" is:unread'
+        # Search for unread emails from "Banco de Chile" with the specified subject after the beginning of today
+        query = f'from:"Banco de Chile" subject:"Compra con Tarjeta de Crédito" is:unread after:{today_timestamp}'
         messages = search_emails(gmail_service, query)
 
         for msg in messages:

@@ -14,4 +14,4 @@ COPY metadata.yml .
 EXPOSE 8080
 
 # Set the command to run the application.
-CMD ["mcp-sqlite", "--metadata", "metadata.yml", "/data/gastos.db"]
+CMD ["mcp-sqlite", "-v", "--metadata", "metadata.yml", "/data/gastos.db"]

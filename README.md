@@ -6,7 +6,7 @@ A minimal, containerized WhatsApp group ingestor for tracking expenses. It uses 
 
 - **Node.js Ingestor (`ingestor` service)**: Connects to WhatsApp using `whatsapp-web.js`, listens for messages in the `GastosMyM` group, and publishes them to a Redis stream (`gastos:msgs`).
 - **Gmail Reader (`gmail-reader` service)**: Connects to the Gmail API, searches for specific emails, and publishes them to the same Redis stream.
-- **Python Worker (`worker` service)**: Consumes messages from the Redis stream, parses them using an LLM, and upserts them into an SQLite database. It exposes a FastAPI for reading the data.
+- **Python Worker (`worker` service)**: Consumes messages from the Redis stream, parses them using an LLM to assign a `category` ('personal' or 'household') and a `subcategory` ('food', 'transport', etc.), and upserts them into an SQLite database. It exposes a FastAPI for reading the data.
 - **Redis (`redis` service)**: Acts as the message broker between the ingestors and the worker.
 - **Frontend (`frontend` service)**: A React-based web application to visualize the expense data.
 - **MCP-SQLite (`mcp-sqlite` service)**: Exposes the SQLite database over a network connection, allowing AI agents to interact with the data.
@@ -110,10 +110,24 @@ All API endpoints (except `/health`) require an API key for authorization. Provi
   ```bash
   curl -H "x-api-key: your-super-secret-and-long-api-key" "http://localhost:8000/messages?limit=50"
   ```
+  *The response will now include a `subcategory` field for each message.*
 
 - **Get a single message by its ID:**
   ```bash
   curl -H "x-api-key: your-super-secret-and-long-api-key" http://localhost:8000/messages/some-message-wid
+  ```
+
+- **Get messages pending clarification:**
+  ```bash
+  curl -H "x-api-key: your-super-secret-and-long-api-key" http://localhost:8000/messages/pending_clarification
+  ```
+
+- **Clarify a message's category and subcategory:**
+  ```bash
+  curl -X POST -H "x-api-key: your-super-secret-and-long-api-key" \
+       -H "Content-Type: application/json" \
+       -d '{"category": "household", "subcategory": "food"}' \
+       http://localhost:8000/messages/clarify/some-message-wid
   ```
 
 ## MCP-SQLite Service
