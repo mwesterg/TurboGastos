@@ -9,7 +9,7 @@ A minimal, containerized WhatsApp group ingestor for tracking expenses. It uses 
 - **Python Worker (`worker` service)**: Consumes messages from the Redis stream, parses them using an LLM to assign a `category` ('personal' or 'household') and a `subcategory` ('food', 'transport', etc.), and upserts them into an SQLite database. It exposes a FastAPI for reading the data.
 - **Redis (`redis` service)**: Acts as the message broker between the ingestors and the worker.
 - **Frontend (`frontend` service)**: A React-based web application to visualize the expense data.
-- **MCP-SQLite (`mcp-sqlite` service)**: Exposes the SQLite database over a network connection, allowing AI agents to interact with the data.
+
 - **Docker Compose**: Orchestrates the entire application stack.
 
 ## Prerequisites
@@ -130,11 +130,7 @@ All API endpoints (except `/health`) require an API key for authorization. Provi
        http://localhost:8000/messages/clarify/some-message-wid
   ```
 
-## MCP-SQLite Service
 
-The `mcp-sqlite` service runs a server that allows AI agents (like the Gemini CLI) to interact with the SQLite database. It exposes a port (8080) that can be used to send queries to the database.
-
-This allows you to ask questions about your data in natural language, and the AI agent will be able to query the database and give you an answer.
 
 ## Volumes Explained
 
