@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { Container, Row, Col, Card, Table, Alert, Form } from 'react-bootstrap';
+import { Container, Row, Col, Card, Table, Alert, Form, Badge } from 'react-bootstrap';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import './App.css';
 
@@ -14,6 +14,8 @@ const apiClient = axios.create({
 
 function App() {
   const [allMessages, setAllMessages] = useState([]);
+  const [monthlyData, setMonthlyData] = useState({});
+  const [selectedMonth, setSelectedMonth] = useState('');
   const [error, setError] = useState('');
   const [senders, setSenders] = useState([]);
   const [selectedUser, setSelectedUser] = useState('All Users');
@@ -23,14 +25,38 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // Group messages by month
+    const dataByMonth = allMessages.reduce((acc, msg) => {
+      const month = new Date(msg.ts * 1000).toISOString().slice(0, 7); // YYYY-MM format
+      if (!acc[month]) {
+        acc[month] = [];
+      }
+      acc[month].push(msg);
+      return acc;
+    }, {});
+    setMonthlyData(dataByMonth);
+
+    // Set default month to the current month if data exists for it
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const sortedMonths = Object.keys(dataByMonth).sort().reverse();
+
+    if (dataByMonth[currentMonth]) {
+      setSelectedMonth(currentMonth);
+    } else if (sortedMonths.length > 0) {
+      // Fallback to the most recent month in the data
+      setSelectedMonth(sortedMonths[0]);
+    }
+
+    // Update unique senders
     const uniqueSenders = ['All Users', ...new Set(allMessages.map(msg => msg.sender_name))];
     setSenders(uniqueSenders);
+
   }, [allMessages]);
 
   const fetchData = async () => {
     try {
       setError('');
-      const messagesRes = await apiClient.get('/messages?limit=1000'); // Fetch more messages for better filtering
+      const messagesRes = await apiClient.get('/messages?limit=2000'); // Fetch more for history
       setAllMessages(messagesRes.data);
     } catch (err) {
       console.error(err);
@@ -39,11 +65,15 @@ function App() {
   };
 
   const filteredMessages = useMemo(() => {
-    if (selectedUser === 'All Users') {
-      return allMessages;
+    if (!selectedMonth || !monthlyData[selectedMonth]) {
+      return [];
     }
-    return allMessages.filter(msg => msg.sender_name === selectedUser);
-  }, [allMessages, selectedUser]);
+    const monthMessages = monthlyData[selectedMonth];
+    if (selectedUser === 'All Users') {
+      return monthMessages;
+    }
+    return monthMessages.filter(msg => msg.sender_name === selectedUser);
+  }, [monthlyData, selectedMonth, selectedUser]);
 
   const summary = useMemo(() => {
     if (!filteredMessages.length) {
@@ -68,7 +98,8 @@ function App() {
   const getCategoryData = () => {
     const categoryMap = filteredMessages.reduce((acc, msg) => {
       if (msg.category && msg.amount) {
-        acc[msg.category] = (acc[msg.category] || 0) + msg.amount;
+        const key = msg.subcategory ? `${msg.category} (${msg.subcategory})` : msg.category;
+        acc[key] = (acc[key] || 0) + msg.amount;
       }
       return acc;
     }, {});
@@ -76,13 +107,34 @@ function App() {
     return Object.keys(categoryMap).map(key => ({ name: key, Total: categoryMap[key] }));
   };
 
+  const getCategoryColor = (category) => {
+    switch (category) {
+      case 'household':
+        return 'primary';
+      case 'personal':
+        return 'success';
+      default:
+        return 'secondary';
+    }
+  }
+
   return (
     <Container fluid className="App">
       <Row className="mb-4 align-items-center">
-        <Col md={8}>
+        <Col md={6}>
           <h1>TurboGastos Dashboard</h1>
         </Col>
-        <Col md={4}>
+        <Col md={3}>
+          <Form.Group controlId="monthFilter">
+            <Form.Label>Filter by Month</Form.Label>
+            <Form.Select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}>
+              {Object.keys(monthlyData).sort().reverse().map(month => (
+                <option key={month} value={month}>{month}</option>
+              ))}
+            </Form.Select>
+          </Form.Group>
+        </Col>
+        <Col md={3}>
           <Form.Group controlId="userFilter">
             <Form.Label>Filter by User</Form.Label>
             <Form.Select value={selectedUser} onChange={e => setSelectedUser(e.target.value)}>
@@ -95,6 +147,8 @@ function App() {
       </Row>
 
       {error && <Alert variant="danger">{error}</Alert>}
+
+      <h2 className="mb-3">Monthly Summary for {selectedMonth}</h2>
 
       <Row className="mb-4">
         <Col md={4}>
@@ -115,7 +169,7 @@ function App() {
         </Col>
         <Col md={4}>
           <Card>
-            <Card.Header>Last Message Received</Card.Header>
+            <Card.Header>Last Message This Month</Card.Header>
             <Card.Body>
               <Card.Title>{summary ? formatTimestamp(summary.last_message_ts) : 'Loading...'}</Card.Title>
             </Card.Body>
@@ -126,14 +180,14 @@ function App() {
       <Row className="mb-4">
         <Col>
           <Card>
-            <Card.Header>Expenses by Category</Card.Header>
+            <Card.Header>Expenses by Category/Subcategory</Card.Header>
             <Card.Body>
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={getCategoryData()}>
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#555" />
                   <XAxis dataKey="name" />
                   <YAxis />
-                  <Tooltip />
+                  <Tooltip contentStyle={{ backgroundColor: '#333' }} />
                   <Legend />
                   <Bar dataKey="Total" fill="#8884d8" />
                 </BarChart>
@@ -146,7 +200,7 @@ function App() {
       <Row>
         <Col>
           <Card>
-            <Card.Header>Recent Messages</Card.Header>
+            <Card.Header>Recent Messages for {selectedMonth}</Card.Header>
             <Card.Body>
               <Table striped bordered hover responsive size="sm">
                 <thead>
@@ -156,6 +210,7 @@ function App() {
                     <th>Body</th>
                     <th>Amount</th>
                     <th>Category</th>
+                    <th>Subcategory</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -165,11 +220,18 @@ function App() {
                       <td>{msg.sender_name}</td>
                       <td>{msg.body}</td>
                       <td>{msg.amount ? `${msg.amount.toFixed(2)}` : 'N/A'}</td>
-                      <td>{msg.category || 'N/A'}</td>
+                      <td>
+                        {msg.category ? (
+                          <Badge bg={getCategoryColor(msg.category)}>
+                            {msg.category}
+                          </Badge>
+                        ) : 'N/A'}
+                      </td>
+                      <td>{msg.subcategory || 'N/A'}</td>
                     </tr>
                   )) : (
                     <tr>
-                      <td colSpan="5" className="text-center">No messages found.</td>
+                      <td colSpan="6" className="text-center">No messages found for this period.</td>
                     </tr>
                   )}
                 </tbody>
